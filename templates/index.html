@@ -7,6 +7,11 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
+<div id="loadingModal" onclick="hideLoading()" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+     background-color:rgba(0,0,0,0.5); z-index:9999; text-align:center; padding-top:200px; color:white; font-size:24px; cursor: pointer;">
+    正在调用大模型，请稍候…（点击隐藏）
+</div>
+
 <body>
     <div class="container">
         <div class="content">
@@ -46,12 +51,18 @@
             window.location.href = "/register";
         }
 
+        function hideLoading() {
+            document.getElementById("loadingModal").style.display = "none";
+        }
+
         function generate(contentType) {
             const systemType = document.getElementById("system_type").value;
             if (!systemType) {
                 alert("请输入系统名称！");
                 return;
             }
+
+            loadingModal.style.display = "block";
 
             fetch("/generate", {
                 method: "POST",
@@ -61,13 +72,19 @@
                     content_type: contentType
                 })
             })
-                .then(res => res.text())
-                .then(data => {
-                    document.getElementById("result").textContent = data;
-                })
-                .catch(err => {
-                    document.getElementById("result").textContent = "请求出错：" + err;
-                });
+            .then(res => res.text())
+            .then(data => {
+                document.getElementById("result").textContent = data;
+                document.getElementById("system_type").value = "";//生成前清除输入框
+            })
+            .catch(err => {
+                document.getElementById("result").textContent = "请求出错：" + err;
+            })
+            .finally(() => {
+                //隐藏提示框
+                loadingModal.style.display = "none";
+            });
+
         }
 
         function exportTxt() {
