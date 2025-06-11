@@ -1,0 +1,2 @@
+python split_to_files.py
+pause
