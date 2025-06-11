@@ -1,0 +1,340 @@
+# 图书管理系统核心模块代码
+
+## 1. 数据库模型 (models.py)
+
+```python
+from django.db import models
+
+class Book(models.Model):
+    ISBN = models.CharField(max_length=20, unique=True)
+    title = models.CharField(max_length=200)
+    author = models.CharField(max_length=100)
+    publisher = models.CharField(max_length=100)
+    publish_date = models.DateField()
+    category = models.CharField(max_length=50)
+    total_copies = models.IntegerField(default=1)
+    available_copies = models.IntegerField(default=1)
+    location = models.CharField(max_length=50)
+    description = models.TextField(blank=True)
+    
+    def __str__(self):
+        return f"{self.title} by {self.author}"
+
+class Member(models.Model):
+    member_id = models.CharField(max_length=10, unique=True)
+    name = models.CharField(max_length=100)
+    email = models.EmailField(unique=True)
+    phone = models.CharField(max_length=15)
+    address = models.TextField()
+    membership_date = models.DateField(auto_now_add=True)
+    status = models.CharField(max_length=10, choices=[
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+        ('suspended', 'Suspended')
+    ], default='active')
+    
+    def __str__(self):
+        return f"{self.name} ({self.member_id})"
+
+class Loan(models.Model):
+    book = models.ForeignKey(Book, on_delete=models.CASCADE)
+    member = models.ForeignKey(Member, on_delete=models.CASCADE)
+    loan_date = models.DateField(auto_now_add=True)
+    due_date = models.DateField()
+    return_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=15, choices=[
+        ('on_loan', 'On Loan'),
+        ('returned', 'Returned'),
+        ('overdue', 'Overdue'),
+        ('lost', 'Lost')
+    ], default='on_loan')
+    
+    def __str__(self):
+        return f"{self.book.title} loaned to {self.member.name}"
+```
+
+## 2. 图书管理模块 (book_management.py)
+
+```python
+from models import Book
+from django.core.exceptions import ObjectDoesNotExist
+
+class BookManager:
+    @staticmethod
+    def add_book(book_data):
+        """添加新书到系统"""
+        try:
+            book = Book.objects.create(**book_data)
+            return book
+        except Exception as e:
+            raise Exception(f"Failed to add book: {str(e)}")
+    
+    @staticmethod
+    def search_books(search_term):
+        """根据标题、作者或ISBN搜索图书"""
+        return Book.objects.filter(
+            models.Q(title__icontains=search_term) |
+            models.Q(author__icontains=search_term) |
+            models.Q(ISBN__icontains=search_term)
+        )
+    
+    @staticmethod
+    def update_book(book_id, update_data):
+        """更新图书信息"""
+        try:
+            book = Book.objects.get(id=book_id)
+            for key, value in update_data.items():
+                setattr(book, key, value)
+            book.save()
+            return book
+        except ObjectDoesNotExist:
+            raise Exception("Book not found")
+        except Exception as e:
+            raise Exception(f"Failed to update book: {str(e)}")
+    
+    @staticmethod
+    def delete_book(book_id):
+        """从系统中删除图书"""
+        try:
+            book = Book.objects.get(id=book_id)
+            book.delete()
+            return True
+        except ObjectDoesNotExist:
+            raise Exception("Book not found")
+        except Exception as e:
+            raise Exception(f"Failed to delete book: {str(e)}")
+```
+
+## 3. 会员管理模块 (member_management.py)
+
+```python
+from models import Member
+from django.core.exceptions import ObjectDoesNotExist
+
+class MemberManager:
+    @staticmethod
+    def register_member(member_data):
+        """注册新会员"""
+        try:
+            member = Member.objects.create(**member_data)
+            return member
+        except Exception as e:
+            raise Exception(f"Failed to register member: {str(e)}")
+    
+    @staticmethod
+    def search_members(search_term):
+        """根据姓名或会员ID搜索会员"""
+        return Member.objects.filter(
+            models.Q(name__icontains=search_term) |
+            models.Q(member_id__icontains=search_term)
+        )
+    
+    @staticmethod
+    def update_member(member_id, update_data):
+        """更新会员信息"""
+        try:
+            member = Member.objects.get(member_id=member_id)
+            for key, value in update_data.items():
+                setattr(member, key, value)
+            member.save()
+            return member
+        except ObjectDoesNotExist:
+            raise Exception("Member not found")
+        except Exception as e:
+            raise Exception(f"Failed to update member: {str(e)}")
+    
+    @staticmethod
+    def change_member_status(member_id, new_status):
+        """更改会员状态"""
+        try:
+            member = Member.objects.get(member_id=member_id)
+            member.status = new_status
+            member.save()
+            return member
+        except ObjectDoesNotExist:
+            raise Exception("Member not found")
+        except Exception as e:
+            raise Exception(f"Failed to change member status: {str(e)}")
+```
+
+## 4. 借阅管理模块 (loan_management.py)
+
+```python
+from models import Book, Member, Loan
+from datetime import datetime, timedelta
+from django.core.exceptions import ObjectDoesNotExist
+
+class LoanManager:
+    LOAN_PERIOD_DAYS = 14  # 默认借阅期限14天
+    
+    @staticmethod
+    def borrow_book(book_id, member_id):
+        """借阅图书"""
+        try:
+            book = Book.objects.get(id=book_id)
+            member = Member.objects.get(member_id=member_id)
+            
+            if book.available_copies <= 0:
+                raise Exception("No available copies of this book")
+            
+            if member.status != 'active':
+                raise Exception("Member is not active")
+            
+            # 创建借阅记录
+            loan = Loan.objects.create(
+                book=book,
+                member=member,
+                due_date=datetime.now() + timedelta(days=LoanManager.LOAN_PERIOD_DAYS)
+            )
+            
+            # 更新图书可用副本数
+            book.available_copies -= 1
+            book.save()
+            
+            return loan
+        except ObjectDoesNotExist as e:
+            raise Exception("Book or member not found")
+        except Exception as e:
+            raise Exception(f"Failed to borrow book: {str(e)}")
+    
+    @staticmethod
+    def return_book(loan_id):
+        """归还图书"""
+        try:
+            loan = Loan.objects.get(id=loan_id)
+            if loan.status == 'returned':
+                raise Exception("Book already returned")
+            
+            # 更新借阅记录
+            loan.return_date = datetime.now()
+            loan.status = 'returned'
+            loan.save()
+            
+            # 更新图书可用副本数
+            book = loan.book
+            book.available_copies += 1
+            book.save()
+            
+            return loan
+        except ObjectDoesNotExist:
+            raise Exception("Loan record not found")
+        except Exception as e:
+            raise Exception(f"Failed to return book: {str(e)}")
+    
+    @staticmethod
+    def check_overdue_loans():
+        """检查逾期未还的图书"""
+        overdue_loans = Loan.objects.filter(
+            status='on_loan',
+            due_date__lt=datetime.now()
+        )
+        
+        # 更新状态为逾期
+        for loan in overdue_loans:
+            loan.status = 'overdue'
+            loan.save()
+        
+        return overdue_loans
+    
+    @staticmethod
+    def get_member_loans(member_id):
+        """获取会员的所有借阅记录"""
+        return Loan.objects.filter(member__member_id=member_id).order_by('-loan_date')
+```
+
+## 5. 报表生成模块 (report_generator.py)
+
+```python
+from models import Book, Member, Loan
+from datetime import datetime, timedelta
+
+class ReportGenerator:
+    @staticmethod
+    def generate_inventory_report():
+        """生成库存报告"""
+        books = Book.objects.all().order_by('title')
+        return {
+            'total_books': books.count(),
+            'books': books,
+            'date_generated': datetime.now()
+        }
+    
+    @staticmethod
+    def generate_loan_report(days=30):
+        """生成借阅报告"""
+        start_date = datetime.now() - timedelta(days=days)
+        loans = Loan.objects.filter(loan_date__gte=start_date)
+        
+        return {
+            'period': f"Last {days} days",
+            'total_loans': loans.count(),
+            'active_loans': loans.filter(status='on_loan').count(),
+            'returned_loans': loans.filter(status='returned').count(),
+            'overdue_loans': loans.filter(status='overdue').count(),
+            'loans': loans,
+            'date_generated': datetime.now()
+        }
+    
+    @staticmethod
+    def generate_overdue_report():
+        """生成逾期报告"""
+        overdue_loans = Loan.objects.filter(status='overdue')
+        
+        return {
+            'total_overdue': overdue_loans.count(),
+            'loans': overdue_loans,
+            'date_generated': datetime.now()
+        }
+    
+    @staticmethod
+    def generate_popular_books_report(limit=10):
+        """生成热门图书报告"""
+        popular_books = Book.objects.annotate(
+            loan_count=models.Count('loan')
+        ).order_by('-loan_count')[:limit]
+        
+        return {
+            'popular_books': popular_books,
+            'date_generated': datetime.now()
+        }
+```
+
+## 6. 系统设置模块 (system_settings.py)
+
+```python
+from django.conf import settings
+from django.core.cache import cache
+
+class SystemSettings:
+    @staticmethod
+    def set_loan_period(days):
+        """设置默认借阅期限"""
+        cache.set('loan_period_days', days)
+    
+    @staticmethod
+    def get_loan_period():
+        """获取默认借阅期限"""
+        return cache.get('loan_period_days', 14)
+    
+    @staticmethod
+    def set_max_books_per_member(max_books):
+        """设置每个会员最多可借阅的图书数量"""
+        cache.set('max_books_per_member', max_books)
+    
+    @staticmethod
+    def get_max_books_per_member():
+        """获取每个会员最多可借阅的图书数量"""
+        return cache.get('max_books_per_member', 5)
+    
+    @staticmethod
+    def set_fine_rate(rate):
+        """设置逾期罚款率（每天）"""
+        cache.set('daily_fine_rate', rate)
+    
+    @staticmethod
+    def get_fine_rate():
+        """获取逾期罚款率（每天）"""
+        return cache.get('daily_fine_rate', 0.5)
+```
+
+以上代码提供了一个完整的图书管理系统的核心模块实现，包括数据库模型、图书管理、会员管理、借阅管理、报表生成和系统设置等功能。这个实现基于Django框架，但可以轻松适配其他框架或纯Python实现。

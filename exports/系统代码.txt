@@ -1,0 +1,510 @@
+## 1. 数据库连接模块（db_connection.py）
+```python
+import pymysql
+from sqlalchemy import create_engine
+
+# 数据库连接配置
+DB_CONFIG = {
+    'url': 'mysql+pymysql://root:280204353jyc@localhost/software?charset=utf8mb4'
+}
+
+def get_db_connection():
+    """获取数据库连接"""
+    return pymysql.connect(
+        host='localhost',
+        user='root',
+        password='280204353jyc',
+        database='software',
+        charset='utf8mb4'
+    )
+
+def get_sqlalchemy_engine():
+    """获取SQLAlchemy引擎"""
+    return create_engine(DB_CONFIG['url'])
+
+def init_database():
+    """初始化数据库表"""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 创建图书表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS books (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    title VARCHAR(100) NOT NULL,
+                    author VARCHAR(50) NOT NULL,
+                    isbn VARCHAR(20) UNIQUE,
+                    publisher VARCHAR(50),
+                    publish_date DATE,
+                    category VARCHAR(30),
+                    stock INT DEFAULT 1,
+                    location VARCHAR(50),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 创建用户表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    username VARCHAR(30) NOT NULL UNIQUE,
+                    password VARCHAR(100) NOT NULL,
+                    name VARCHAR(30) NOT NULL,
+                    role ENUM('admin', 'librarian', 'user') DEFAULT 'user',
+                    email VARCHAR(50),
+                    phone VARCHAR(20),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # 创建借阅记录表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS borrow_records (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    book_id INT NOT NULL,
+                    user_id INT NOT NULL,
+                    borrow_date DATE NOT NULL,
+                    due_date DATE NOT NULL,
+                    return_date DATE,
+                    status ENUM('borrowed', 'returned', 'overdue') DEFAULT 'borrowed',
+                    FOREIGN KEY (book_id) REFERENCES books(id),
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                )
+            """)
+            
+            # 插入默认管理员账户
+            cursor.execute("""
+                INSERT IGNORE INTO users (username, password, name, role) 
+                VALUES ('admin', 'admin123', '系统管理员', 'admin')
+            """)
+            
+        conn.commit()
+    finally:
+        conn.close()
+```
+
+## 2. 图书管理模块（book_manager.py）
+```python
+from db_connection import get_db_connection
+from datetime import datetime
+
+class BookManager:
+    @staticmethod
+    def add_book(title, author, isbn, publisher=None, publish_date=None, category=None, stock=1, location=None):
+        """添加新书"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    INSERT INTO books (title, author, isbn, publisher, publish_date, category, stock, location)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """
+                cursor.execute(sql, (title, author, isbn, publisher, publish_date, category, stock, location))
+            conn.commit()
+            return True
+        except pymysql.Error as e:
+            print(f"添加图书失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    @staticmethod
+    def search_books(keyword=None, field='title'):
+        """搜索图书"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                if keyword:
+                    sql = f"SELECT * FROM books WHERE {field} LIKE %s"
+                    cursor.execute(sql, (f"%{keyword}%",))
+                else:
+                    sql = "SELECT * FROM books"
+                    cursor.execute(sql)
+                return cursor.fetchall()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def update_book(book_id, **kwargs):
+        """更新图书信息"""
+        if not kwargs:
+            return False
+            
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                set_clause = ", ".join([f"{k}=%s" for k in kwargs])
+                sql = f"UPDATE books SET {set_clause} WHERE id=%s"
+                cursor.execute(sql, (*kwargs.values(), book_id))
+            conn.commit()
+            return True
+        except pymysql.Error as e:
+            print(f"更新图书失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    @staticmethod
+    def delete_book(book_id):
+        """删除图书"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = "DELETE FROM books WHERE id=%s"
+                cursor.execute(sql, (book_id,))
+            conn.commit()
+            return True
+        except pymysql.Error as e:
+            print(f"删除图书失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_book_by_id(book_id):
+        """根据ID获取图书详情"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                sql = "SELECT * FROM books WHERE id=%s"
+                cursor.execute(sql, (book_id,))
+                return cursor.fetchone()
+        finally:
+            conn.close()
+```
+
+## 3. 用户管理模块（user_manager.py）
+```python
+from db_connection import get_db_connection
+import hashlib
+
+class UserManager:
+    @staticmethod
+    def _hash_password(password):
+        """密码加密"""
+        return hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def add_user(username, password, name, role='user', email=None, phone=None):
+        """添加用户"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    INSERT INTO users (username, password, name, role, email, phone)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                cursor.execute(sql, (username, UserManager._hash_password(password), 
+                                   name, role, email, phone))
+            conn.commit()
+            return True
+        except pymysql.Error as e:
+            print(f"添加用户失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    @staticmethod
+    def authenticate(username, password):
+        """用户认证"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                sql = "SELECT * FROM users WHERE username=%s AND password=%s"
+                cursor.execute(sql, (username, UserManager._hash_password(password)))
+                return cursor.fetchone()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_user_by_id(user_id):
+        """根据ID获取用户信息"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                sql = "SELECT * FROM users WHERE id=%s"
+                cursor.execute(sql, (user_id,))
+                return cursor.fetchone()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def update_user(user_id, **kwargs):
+        """更新用户信息"""
+        if 'password' in kwargs:
+            kwargs['password'] = UserManager._hash_password(kwargs['password'])
+            
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                set_clause = ", ".join([f"{k}=%s" for k in kwargs])
+                sql = f"UPDATE users SET {set_clause} WHERE id=%s"
+                cursor.execute(sql, (*kwargs.values(), user_id))
+            conn.commit()
+            return True
+        except pymysql.Error as e:
+            print(f"更新用户失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    @staticmethod
+    def search_users(keyword=None):
+        """搜索用户"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                if keyword:
+                    sql = """
+                        SELECT * FROM users 
+                        WHERE username LIKE %s OR name LIKE %s OR email LIKE %s
+                    """
+                    cursor.execute(sql, (f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"))
+                else:
+                    sql = "SELECT * FROM users"
+                    cursor.execute(sql)
+                return cursor.fetchall()
+        finally:
+            conn.close()
+```
+
+## 4. 借阅管理模块（borrow_manager.py）
+```python
+from db_connection import get_db_connection
+from datetime import datetime, timedelta
+
+class BorrowManager:
+    @staticmethod
+    def borrow_book(book_id, user_id, borrow_days=30):
+        """借阅图书"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                # 检查图书库存
+                cursor.execute("SELECT stock FROM books WHERE id=%s FOR UPDATE", (book_id,))
+                book = cursor.fetchone()
+                if not book or book['stock'] <= 0:
+                    return False, "图书库存不足"
+                
+                # 减少库存
+                cursor.execute("UPDATE books SET stock=stock-1 WHERE id=%s", (book_id,))
+                
+                # 创建借阅记录
+                borrow_date = datetime.now().date()
+                due_date = borrow_date + timedelta(days=borrow_days)
+                sql = """
+                    INSERT INTO borrow_records (book_id, user_id, borrow_date, due_date, status)
+                    VALUES (%s, %s, %s, %s, 'borrowed')
+                """
+                cursor.execute(sql, (book_id, user_id, borrow_date, due_date))
+                
+            conn.commit()
+            return True, "借阅成功"
+        except pymysql.Error as e:
+            conn.rollback()
+            return False, f"借阅失败: {e}"
+        finally:
+            conn.close()
+
+    @staticmethod
+    def return_book(record_id):
+        """归还图书"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                # 获取借阅记录
+                cursor.execute("SELECT book_id FROM borrow_records WHERE id=%s", (record_id,))
+                record = cursor.fetchone()
+                if not record:
+                    return False, "借阅记录不存在"
+                
+                # 增加图书库存
+                cursor.execute("UPDATE books SET stock=stock+1 WHERE id=%s", (record['book_id'],))
+                
+                # 更新借阅记录
+                return_date = datetime.now().date()
+                cursor.execute("""
+                    UPDATE borrow_records 
+                    SET return_date=%s, status='returned' 
+                    WHERE id=%s
+                """, (return_date, record_id))
+                
+            conn.commit()
+            return True, "归还成功"
+        except pymysql.Error as e:
+            conn.rollback()
+            return False, f"归还失败: {e}"
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_user_borrow_records(user_id):
+        """获取用户借阅记录"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                sql = """
+                    SELECT r.*, b.title, b.author 
+                    FROM borrow_records r
+                    JOIN books b ON r.book_id = b.id
+                    WHERE r.user_id=%s
+                    ORDER BY r.borrow_date DESC
+                """
+                cursor.execute(sql, (user_id,))
+                return cursor.fetchall()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_all_borrow_records(status=None):
+        """获取所有借阅记录"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                if status:
+                    sql = """
+                        SELECT r.*, b.title, b.author, u.name as user_name 
+                        FROM borrow_records r
+                        JOIN books b ON r.book_id = b.id
+                        JOIN users u ON r.user_id = u.id
+                        WHERE r.status=%s
+                        ORDER BY r.borrow_date DESC
+                    """
+                    cursor.execute(sql, (status,))
+                else:
+                    sql = """
+                        SELECT r.*, b.title, b.author, u.name as user_name 
+                        FROM borrow_records r
+                        JOIN books b ON r.book_id = b.id
+                        JOIN users u ON r.user_id = u.id
+                        ORDER BY r.borrow_date DESC
+                    """
+                    cursor.execute(sql)
+                return cursor.fetchall()
+        finally:
+            conn.close()
+```
+
+## 5. 主界面模块（main_window.py）
+```python
+import tkinter as tk
+from tkinter import ttk, messagebox
+from user_manager import UserManager
+from book_manager import BookManager
+from borrow_manager import BorrowManager
+
+class MainWindow:
+    def __init__(self, root, user):
+        self.root = root
+        self.user = user
+        self.root.title(f"图书管理系统 - {'管理员' if user['role'] == 'admin' else '用户'}界面")
+        self.root.geometry("1000x600")
+        
+        # 创建菜单栏
+        self.create_menu()
+        
+        # 创建主界面
+        self.create_main_frame()
+        
+    def create_menu(self):
+        """创建菜单栏"""
+        menubar = tk.Menu(self.root)
+        
+        # 图书菜单
+        book_menu = tk.Menu(menubar, tearoff=0)
+        book_menu.add_command(label="图书查询", command=self.show_book_search)
+        if self.user['role'] in ['admin', 'librarian']:
+            book_menu.add_command(label="添加图书", command=self.show_add_book)
+        menubar.add_cascade(label="图书管理", menu=book_menu)
+        
+        # 用户菜单
+        if self.user['role'] == 'admin':
+            user_menu = tk.Menu(menubar, tearoff=0)
+            user_menu.add_command(label="用户查询", command=self.show_user_search)
+            user_menu.add_command(label="添加用户", command=self.show_add_user)
+            menubar.add_cascade(label="用户管理", menu=user_menu)
+        
+        # 借阅菜单
+        borrow_menu = tk.Menu(menubar, tearoff=0)
+        borrow_menu.add_command(label="我的借阅", command=self.show_my_borrow)
+        if self.user['role'] in ['admin', 'librarian']:
+            borrow_menu.add_command(label="所有借阅", command=self.show_all_borrow)
+        menubar.add_cascade(label="借阅管理", menu=borrow_menu)
+        
+        # 帮助菜单
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="关于", command=self.show_about)
+        menubar.add_cascade(label="帮助", menu=help_menu)
+        
+        self.root.config(menu=menubar)
+    
+    def create_main_frame(self):
+        """创建主界面框架"""
+        self.clear_frame()
+        
+        self.main_frame = ttk.Frame(self.root)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        label = ttk.Label(self.main_frame, 
+                         text=f"欢迎使用图书管理系统，{self.user['name']}！",
+                         font=('Arial', 14))
+        label.pack(pady=20)
+        
+        # 显示统计信息
+        self.show_stats()
+    
+    def show_stats(self):
+        """显示统计信息"""
+        stats_frame = ttk.LabelFrame(self.main_frame, text="系统统计")
+        stats_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        # 获取统计数据
+        book_count = len(BookManager.search_books())
+        user_count = len(UserManager.search_users())
+        borrowed_count = len(BorrowManager.get_all_borrow_records('borrowed'))
+        
+        ttk.Label(stats_frame, text=f"图书总数: {book_count}").pack(side=tk.LEFT, padx=20)
+        ttk.Label(stats_frame, text=f"用户总数: {user_count}").pack(side=tk.LEFT, padx=20)
+        ttk.Label(stats_frame, text=f"在借图书: {borrowed_count}").pack(side=tk.LEFT, padx=20)
+    
+    def show_book_search(self):
+        """显示图书查询界面"""
+        self.clear_frame()
+        
+        search_frame = ttk.Frame(self.root)
+        search_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # 搜索条件
+        condition_frame = ttk.Frame(search_frame)
+        condition_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(condition_frame, text="搜索条件:").pack(side=tk.LEFT)
+        self.search_field = ttk.Combobox(condition_frame, values=["title", "author", "isbn", "publisher"])
+        self.search_field.set("title")
+        self.search_field.pack(side=tk.LEFT, padx=5)
+        
+        self.search_entry = ttk.Entry(condition_frame, width=30)
+        self.search_entry.pack(side=tk.LEFT, padx=5)
+        
+        search_btn = ttk.Button(condition_frame, text="搜索", command=self.do_book_search)
+        search_btn.pack(side=tk.LEFT)
+        
+        if self.user['role'] in ['admin', 'librarian']:
+            add_btn = ttk.Button(condition_frame, text="添加图书", command=self.show_add_book)
+            add_btn.pack(side=tk.RIGHT)
+        
+        # 图书列表
+        columns = ("id", "title", "author", "isbn", "publisher", "stock")
+        self.book_tree = ttk.Treeview(search_frame, columns=columns, show="headings")
+        
+        # 设置列标题
+        self.book_tree.heading("id", text="ID")
+        self.book_tree.heading("title", text="书名")
+        self.book_tree.heading("author", text="作者")
+        self.book_tree.heading("isbn", text="ISBN")
+        self.book_tree.heading("publisher", text="出版社")
+        self.book_tree.heading("stock", text="库存")
+        
+        # 设置列宽
+        self.book_tree.column("id", width=50)
+        self.book_tree.column
