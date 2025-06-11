@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <title>智慧校园生成系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="content">
+            <h1>智慧校园生成系统</h1>
+
+            <div class="buttons-container">
+                <button onclick="location.href='/login'">登录</button>
+                <button onclick="location.href='/register'">注册</button>
+            </div>
+
+            <label for="system_type">请输入系统名称：</label>
+            <input type="text" id="system_type" name="system_type" placeholder="例如：图书管理系统">
+
+            <div class="buttons-container">
+                <button onclick="generate('architecture')">生成系统架构</button>
+                <button onclick="generate('database')">生成数据库设计</button>
+                <button onclick="generate('code')">生成模块代码</button>
+                <button onclick="generate('test')">生成测试用例</button>
+            </div>
+
+            <h3>生成结果：</h3>
+            <div id="result">这里将显示生成的内容</div>
+
+            <h3>导出为TXT文件：</h3>
+            <input type="text" id="filename" placeholder="请输入导出文件名（例如 result.txt）">
+            <div class="buttons-container">
+                <button onclick="exportTxt()">导出</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        function goToLogin() {
+            window.location.href = "/login";
+        }
+
+        function goToRegister() {
+            window.location.href = "/register";
+        }
+
+        function generate(contentType) {
+            const systemType = document.getElementById("system_type").value;
+            if (!systemType) {
+                alert("请输入系统名称！");
+                return;
+            }
+
+            fetch("/generate", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({
+                    system_type: systemType,
+                    content_type: contentType
+                })
+            })
+                .then(res => res.text())
+                .then(data => {
+                    document.getElementById("result").textContent = data;
+                })
+                .catch(err => {
+                    document.getElementById("result").textContent = "请求出错：" + err;
+                });
+        }
+
+        function exportTxt() {
+            const content = document.getElementById("result").textContent;
+            const filename = document.getElementById("filename").value || "exported.txt";
+
+            fetch("/export", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({
+                    export_content: content,
+                    filename: filename
+                })
+            })
+                .then(res => res.blob())
+                .then(blob => {
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                });
+        }
+    </script>
+</body>
+
+</html>

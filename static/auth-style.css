@@ -1,0 +1,107 @@
+/* auth-style.css */
+
+html, body {
+    height: 100%;
+    margin: 0;
+    background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    color: #1a2a6c;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 50px;
+    box-sizing: border-box;
+}
+
+body {
+    background-color: transparent;
+}
+
+.container {
+    background-color: white;
+    padding: 40px 50px;
+    border-radius: 12px;
+    box-shadow: 0 8px 25px rgba(33, 150, 243, 0.2);
+    max-width: 400px;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+}
+
+h2 {
+    margin-bottom: 30px;
+    color: #1a2a6c;
+    font-weight: 700;
+    font-size: 2rem;
+}
+
+form label {
+    display: block;
+    text-align: left;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #1a2a6c;
+}
+
+input[type="text"],
+input[type="password"] {
+    width: 100%;
+    padding: 10px 12px;
+    margin-bottom: 20px;
+    border: 1.8px solid #cbd6f0;
+    border-radius: 5px;
+    font-size: 1rem;
+    color: #1a2a6c;
+    box-sizing: border-box;
+    transition: border-color 0.3s ease;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus {
+    border-color: #3b4cca;
+    outline: none;
+}
+
+button[type="submit"] {
+    background-color: #1a2a6c;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    font-size: 1.1rem;
+    border-radius: 5px;
+    cursor: pointer;
+    width: 100%;
+    transition: background-color 0.3s ease;
+}
+
+button[type="submit"]:hover {
+    background-color: #3b4cca;
+}
+
+p {
+    margin-top: 20px;
+    font-size: 1rem;
+    color: #1a2a6c;
+}
+
+p a {
+    color: #3b4cca;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+p a:hover {
+    text-decoration: underline;
+}
+
+/* 响应式 */
+@media (max-width: 480px) {
+    .container {
+        padding: 30px 25px;
+        max-width: 90vw;
+    }
+
+    h2 {
+        font-size: 1.7rem;
+    }
+}

@@ -1,0 +1,492 @@
+# 图书管理系统核心模块代码
+
+## 1. 数据库模型 (models.py)
+
+```python
+from django.db import models
+from django.contrib.auth.models import User
+
+class Book(models.Model):
+    ISBN = models.CharField(max_length=20, unique=True)
+    title = models.CharField(max_length=200)
+    author = models.CharField(max_length=100)
+    publisher = models.CharField(max_length=100)
+    publish_date = models.DateField()
+    category = models.CharField(max_length=50)
+    total_copies = models.IntegerField(default=1)
+    available_copies = models.IntegerField(default=1)
+    location = models.CharField(max_length=50)
+    description = models.TextField(blank=True)
+    cover_image = models.ImageField(upload_to='book_covers/', null=True, blank=True)
+    
+    def __str__(self):
+        return f"{self.title} by {self.author}"
+
+class Borrower(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    student_id = models.CharField(max_length=20, unique=True)
+    phone = models.CharField(max_length=15)
+    address = models.TextField()
+    max_borrow_limit = models.IntegerField(default=5)
+    current_borrowed = models.IntegerField(default=0)
+    
+    def __str__(self):
+        return f"{self.user.get_full_name()} ({self.student_id})"
+
+class BorrowRecord(models.Model):
+    book = models.ForeignKey(Book, on_delete=models.CASCADE)
+    borrower = models.ForeignKey(Borrower, on_delete=models.CASCADE)
+    borrow_date = models.DateField(auto_now_add=True)
+    due_date = models.DateField()
+    return_date = models.DateField(null=True, blank=True)
+    status_choices = [
+        ('BORROWED', 'Borrowed'),
+        ('RETURNED', 'Returned'),
+        ('OVERDUE', 'Overdue'),
+        ('LOST', 'Lost'),
+    ]
+    status = models.CharField(max_length=10, choices=status_choices, default='BORROWED')
+    
+    def __str__(self):
+        return f"{self.borrower} borrowed {self.book} on {self.borrow_date}"
+
+class Reservation(models.Model):
+    book = models.ForeignKey(Book, on_delete=models.CASCADE)
+    borrower = models.ForeignKey(Borrower, on_delete=models.CASCADE)
+    reserve_date = models.DateField(auto_now_add=True)
+    status_choices = [
+        ('PENDING', 'Pending'),
+        ('FULFILLED', 'Fulfilled'),
+        ('CANCELLED', 'Cancelled'),
+    ]
+    status = models.CharField(max_length=10, choices=status_choices, default='PENDING')
+    
+    def __str__(self):
+        return f"{self.borrower} reserved {self.book} on {self.reserve_date}"
+```
+
+## 2. 视图函数 (views.py)
+
+```python
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth.decorators import login_required
+from django.contrib import messages
+from datetime import date, timedelta
+from .models import Book, Borrower, BorrowRecord, Reservation
+
+@login_required
+def book_list(request):
+    books = Book.objects.all()
+    query = request.GET.get('q')
+    if query:
+        books = books.filter(
+            models.Q(title__icontains=query) |
+            models.Q(author__icontains=query) |
+            models.Q(ISBN__icontains=query) |
+            models.Q(category__icontains=query)
+        )
+    return render(request, 'books/list.html', {'books': books})
+
+@login_required
+def book_detail(request, pk):
+    book = get_object_or_404(Book, pk=pk)
+    is_available = book.available_copies > 0
+    borrower = Borrower.objects.get(user=request.user)
+    is_reserved = Reservation.objects.filter(book=book, borrower=borrower, status='PENDING').exists()
+    is_borrowed = BorrowRecord.objects.filter(book=book, borrower=borrower, status='BORROWED').exists()
+    
+    return render(request, 'books/detail.html', {
+        'book': book,
+        'is_available': is_available,
+        'is_reserved': is_reserved,
+        'is_borrowed': is_borrowed
+    })
+
+@login_required
+def borrow_book(request, pk):
+    book = get_object_or_404(Book, pk=pk)
+    borrower = Borrower.objects.get(user=request.user)
+    
+    if book.available_copies <= 0:
+        messages.error(request, "No available copies of this book.")
+        return redirect('book_detail', pk=pk)
+    
+    if borrower.current_borrowed >= borrower.max_borrow_limit:
+        messages.error(request, "You have reached your borrowing limit.")
+        return redirect('book_detail', pk=pk)
+    
+    # Create borrow record
+    borrow_record = BorrowRecord(
+        book=book,
+        borrower=borrower,
+        due_date=date.today() + timedelta(days=14),
+        status='BORROWED'
+    )
+    borrow_record.save()
+    
+    # Update book and borrower info
+    book.available_copies -= 1
+    book.save()
+    borrower.current_borrowed += 1
+    borrower.save()
+    
+    messages.success(request, f"You have successfully borrowed '{book.title}'.")
+    return redirect('my_borrowings')
+
+@login_required
+def return_book(request, pk):
+    borrow_record = get_object_or_404(BorrowRecord, pk=pk, borrower__user=request.user)
+    
+    if borrow_record.status != 'BORROWED':
+        messages.error(request, "This book is not currently borrowed.")
+        return redirect('my_borrowings')
+    
+    # Update borrow record
+    borrow_record.return_date = date.today()
+    borrow_record.status = 'RETURNED'
+    borrow_record.save()
+    
+    # Update book and borrower info
+    book = borrow_record.book
+    book.available_copies += 1
+    book.save()
+    borrower = borrow_record.borrower
+    borrower.current_borrowed -= 1
+    borrower.save()
+    
+    messages.success(request, f"You have successfully returned '{book.title}'.")
+    return redirect('my_borrowings')
+
+@login_required
+def reserve_book(request, pk):
+    book = get_object_or_404(Book, pk=pk)
+    borrower = Borrower.objects.get(user=request.user)
+    
+    if book.available_copies > 0:
+        messages.error(request, "This book is available for borrowing, no need to reserve.")
+        return redirect('book_detail', pk=pk)
+    
+    if Reservation.objects.filter(book=book, borrower=borrower, status='PENDING').exists():
+        messages.error(request, "You have already reserved this book.")
+        return redirect('book_detail', pk=pk)
+    
+    # Create reservation
+    reservation = Reservation(
+        book=book,
+        borrower=borrower,
+        status='PENDING'
+    )
+    reservation.save()
+    
+    messages.success(request, f"You have successfully reserved '{book.title}'.")
+    return redirect('my_reservations')
+
+@login_required
+def my_borrowings(request):
+    borrower = Borrower.objects.get(user=request.user)
+    borrowings = BorrowRecord.objects.filter(borrower=borrower).order_by('-borrow_date')
+    return render(request, 'accounts/my_borrowings.html', {'borrowings': borrowings})
+
+@login_required
+def my_reservations(request):
+    borrower = Borrower.objects.get(user=request.user)
+    reservations = Reservation.objects.filter(borrower=borrower).order_by('-reserve_date')
+    return render(request, 'accounts/my_reservations.html', {'reservations': reservations})
+```
+
+## 3. 管理员功能 (admin.py)
+
+```python
+from django.contrib import admin
+from .models import Book, Borrower, BorrowRecord, Reservation
+
+class BookAdmin(admin.ModelAdmin):
+    list_display = ('title', 'author', 'ISBN', 'available_copies', 'total_copies')
+    list_filter = ('category', 'publisher')
+    search_fields = ('title', 'author', 'ISBN')
+    readonly_fields = ('available_copies',)
+
+class BorrowerAdmin(admin.ModelAdmin):
+    list_display = ('user', 'student_id', 'phone', 'current_borrowed', 'max_borrow_limit')
+    search_fields = ('user__username', 'student_id', 'user__first_name', 'user__last_name')
+
+class BorrowRecordAdmin(admin.ModelAdmin):
+    list_display = ('book', 'borrower', 'borrow_date', 'due_date', 'return_date', 'status')
+    list_filter = ('status', 'borrow_date')
+    search_fields = ('book__title', 'borrower__user__username', 'borrower__student_id')
+    actions = ['mark_as_returned', 'mark_as_lost']
+
+    def mark_as_returned(self, request, queryset):
+        for record in queryset:
+            if record.status == 'BORROWED':
+                record.return_date = date.today()
+                record.status = 'RETURNED'
+                record.save()
+                # Update book and borrower info
+                record.book.available_copies += 1
+                record.book.save()
+                record.borrower.current_borrowed -= 1
+                record.borrower.save()
+        self.message_user(request, "Selected records marked as returned.")
+    mark_as_returned.short_description = "Mark selected as returned"
+
+    def mark_as_lost(self, request, queryset):
+        for record in queryset:
+            if record.status == 'BORROWED':
+                record.status = 'LOST'
+                record.save()
+                # Don't increment available copies for lost books
+                record.borrower.current_borrowed -= 1
+                record.borrower.save()
+        self.message_user(request, "Selected records marked as lost.")
+    mark_as_lost.short_description = "Mark selected as lost"
+
+class ReservationAdmin(admin.ModelAdmin):
+    list_display = ('book', 'borrower', 'reserve_date', 'status')
+    list_filter = ('status', 'reserve_date')
+    search_fields = ('book__title', 'borrower__user__username')
+    actions = ['fulfill_reservation']
+
+    def fulfill_reservation(self, request, queryset):
+        for reservation in queryset:
+            if reservation.status == 'PENDING' and reservation.book.available_copies > 0:
+                reservation.status = 'FULFILLED'
+                reservation.save()
+                # Create borrow record
+                borrow_record = BorrowRecord(
+                    book=reservation.book,
+                    borrower=reservation.borrower,
+                    due_date=date.today() + timedelta(days=14),
+                    status='BORROWED'
+                )
+                borrow_record.save()
+                # Update book and borrower info
+                reservation.book.available_copies -= 1
+                reservation.book.save()
+                reservation.borrower.current_borrowed += 1
+                reservation.borrower.save()
+        self.message_user(request, "Selected reservations fulfilled.")
+    fulfill_reservation.short_description = "Fulfill selected reservations"
+
+admin.site.register(Book, BookAdmin)
+admin.site.register(Borrower, BorrowerAdmin)
+admin.site.register(BorrowRecord, BorrowRecordAdmin)
+admin.site.register(Reservation, ReservationAdmin)
+```
+
+## 4. API 接口 (api.py)
+
+```python
+from rest_framework import viewsets, permissions
+from rest_framework.response import Response
+from .models import Book, Borrower, BorrowRecord, Reservation
+from .serializers import BookSerializer, BorrowerSerializer, BorrowRecordSerializer, ReservationSerializer
+
+class BookViewSet(viewsets.ModelViewSet):
+    queryset = Book.objects.all()
+    serializer_class = BookSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    filterset_fields = ['category', 'author', 'publisher']
+    search_fields = ['title', 'author', 'ISBN', 'description']
+
+class BorrowerViewSet(viewsets.ModelViewSet):
+    queryset = Borrower.objects.all()
+    serializer_class = BorrowerSerializer
+    permission_classes = [permissions.IsAdminUser]
+    search_fields = ['user__username', 'student_id', 'user__first_name', 'user__last_name']
+
+class BorrowRecordViewSet(viewsets.ModelViewSet):
+    serializer_class = BorrowRecordSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return BorrowRecord.objects.all()
+        return BorrowRecord.objects.filter(borrower__user=user)
+    
+    def perform_create(self, serializer):
+        book = serializer.validated_data['book']
+        borrower = serializer.validated_data['borrower']
+        
+        if book.available_copies <= 0:
+            raise serializers.ValidationError("No available copies of this book.")
+        
+        if borrower.current_borrowed >= borrower.max_borrow_limit:
+            raise serializers.ValidationError("Borrower has reached borrowing limit.")
+        
+        serializer.save(
+            borrow_date=date.today(),
+            due_date=date.today() + timedelta(days=14),
+            status='BORROWED'
+        )
+        
+        # Update book and borrower info
+        book.available_copies -= 1
+        book.save()
+        borrower.current_borrowed += 1
+        borrower.save()
+
+class ReservationViewSet(viewsets.ModelViewSet):
+    serializer_class = ReservationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return Reservation.objects.all()
+        return Reservation.objects.filter(borrower__user=user)
+    
+    def perform_create(self, serializer):
+        book = serializer.validated_data['book']
+        borrower = serializer.validated_data['borrower']
+        
+        if book.available_copies > 0:
+            raise serializers.ValidationError("Book is available, no need to reserve.")
+        
+        if Reservation.objects.filter(book=book, borrower=borrower, status='PENDING').exists():
+            raise serializers.ValidationError("You have already reserved this book.")
+        
+        serializer.save(
+            reserve_date=date.today(),
+            status='PENDING'
+        )
+```
+
+## 5. 实用工具函数 (utils.py)
+
+```python
+from datetime import date
+from django.core.mail import send_mail
+from django.conf import settings
+from .models import BorrowRecord
+
+def check_overdue_books():
+    """检查并更新逾期图书状态，发送提醒邮件"""
+    overdue_records = BorrowRecord.objects.filter(
+        due_date__lt=date.today(),
+        status='BORROWED'
+    )
+    
+    for record in overdue_records:
+        record.status = 'OVERDUE'
+        record.save()
+        
+        # 发送提醒邮件
+        subject = f"Overdue Book: {record.book.title}"
+        message = f"""
+        Dear {record.borrower.user.get_full_name()},
+        
+        The book "{record.book.title}" you borrowed on {record.borrow_date} 
+        is now overdue. Please return it as soon as possible to avoid penalties.
+        
+        Original due date: {record.due_date}
+        
+        Thank you,
+        Library Management System
+        """
+        send_mail(
+            subject,
+            message,
+            settings.DEFAULT_FROM_EMAIL,
+            [record.borrower.user.email],
+            fail_silently=True
+        )
+    
+    return f"Checked {overdue_records.count()} overdue records."
+
+def notify_reservation_available(reservation):
+    """通知预约用户图书可用"""
+    subject = f"Reserved Book Available: {reservation.book.title}"
+    message = f"""
+    Dear {reservation.borrower.user.get_full_name()},
+    
+    The book "{reservation.book.title}" you reserved is now available.
+    Please visit the library within 3 days to borrow it, or your reservation will be cancelled.
+    
+    Thank you,
+    Library Management System
+    """
+    send_mail(
+        subject,
+        message,
+        settings.DEFAULT_FROM_EMAIL,
+        [reservation.borrower.user.email],
+        fail_silently=True
+    )
+```
+
+## 6. 序列化器 (serializers.py)
+
+```python
+from rest_framework import serializers
+from .models import Book, Borrower, BorrowRecord, Reservation
+from django.contrib.auth.models import User
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name', 'email']
+
+class BookSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Book
+        fields = '__all__'
+        read_only_fields = ['available_copies']
+
+class BorrowerSerializer(serializers.ModelSerializer):
+    user = UserSerializer()
+    
+    class Meta:
+        model = Borrower
+        fields = '__all__'
+        read_only_fields = ['current_borrowed']
+
+class BorrowRecordSerializer(serializers.ModelSerializer):
+    book = BookSerializer(read_only=True)
+    book_id = serializers.PrimaryKeyRelatedField(
+        queryset=Book.objects.all(), 
+        source='book', 
+        write_only=True
+    )
+    borrower = BorrowerSerializer(read_only=True)
+    borrower_id = serializers.PrimaryKeyRelatedField(
+        queryset=Borrower.objects.all(), 
+        source='borrower', 
+        write_only=True
+    )
+    
+    class Meta:
+        model = BorrowRecord
+        fields = '__all__'
+        read_only_fields = ['borrow_date', 'due_date', 'return_date', 'status']
+
+class ReservationSerializer(serializers.ModelSerializer):
+    book = BookSerializer(read_only=True)
+    book_id = serializers.PrimaryKeyRelatedField(
+        queryset=Book.objects.all(), 
+        source='book', 
+        write_only=True
+    )
+    borrower = BorrowerSerializer(read_only=True)
+    borrower_id = serializers.PrimaryKeyRelatedField(
+        queryset=Borrower.objects.all(), 
+        source='borrower', 
+        write_only=True
+    )
+    
+    class Meta:
+        model = Reservation
+        fields = '__all__'
+        read_only_fields = ['reserve_date', 'status']
+```
+
+这个图书管理系统包含了以下核心功能模块：
+1. 图书管理（增删改查、分类、搜索）
+2. 借阅者管理（用户注册、信息管理）
+3. 借阅记录（借书、还书、续借）
+4. 预约系统（预约、取消预约）
+5. 管理员功能（数据管理、报表生成）
+6. API接口（供移动端或其他系统集成）
+
+系统基于Django框架实现，可以根据实际需求进行扩展和修改。

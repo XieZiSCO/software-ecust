@@ -1,0 +1,155 @@
+# 图书管理系统数据库设计
+
+## 数据库概述
+本设计为图书管理系统提供完整的数据库结构，包含用户管理、图书管理、借阅管理等功能模块。
+
+## 表结构设计
+
+### 1. 用户表 (users)
+```sql
+CREATE TABLE users (
+    user_id INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    real_name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE,
+    phone VARCHAR(20),
+    address TEXT,
+    user_type ENUM('admin', 'librarian', 'reader') NOT NULL DEFAULT 'reader',
+    registration_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('active', 'inactive', 'suspended') NOT NULL DEFAULT 'active',
+    last_login DATETIME
+);
+```
+
+### 2. 图书表 (books)
+```sql
+CREATE TABLE books (
+    book_id INT PRIMARY KEY AUTO_INCREMENT,
+    isbn VARCHAR(20) NOT NULL UNIQUE,
+    title VARCHAR(255) NOT NULL,
+    author VARCHAR(255) NOT NULL,
+    publisher VARCHAR(255),
+    publish_date DATE,
+    category_id INT,
+    edition VARCHAR(50),
+    pages INT,
+    language VARCHAR(50),
+    description TEXT,
+    cover_image VARCHAR(255),
+    total_copies INT NOT NULL DEFAULT 1,
+    available_copies INT NOT NULL DEFAULT 1,
+    shelf_location VARCHAR(50),
+    added_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (category_id) REFERENCES categories(category_id)
+);
+```
+
+### 3. 图书分类表 (categories)
+```sql
+CREATE TABLE categories (
+    category_id INT PRIMARY KEY AUTO_INCREMENT,
+    category_name VARCHAR(100) NOT NULL UNIQUE,
+    parent_id INT,
+    description TEXT,
+    FOREIGN KEY (parent_id) REFERENCES categories(category_id)
+);
+```
+
+### 4. 借阅记录表 (borrow_records)
+```sql
+CREATE TABLE borrow_records (
+    record_id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    book_id INT NOT NULL,
+    borrow_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    due_date DATETIME NOT NULL,
+    return_date DATETIME,
+    status ENUM('borrowed', 'returned', 'overdue', 'lost') NOT NULL DEFAULT 'borrowed',
+    fine_amount DECIMAL(10,2) DEFAULT 0.00,
+    paid_status ENUM('paid', 'unpaid') DEFAULT 'unpaid',
+    librarian_id INT,
+    notes TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(user_id),
+    FOREIGN KEY (book_id) REFERENCES books(book_id),
+    FOREIGN KEY (librarian_id) REFERENCES users(user_id)
+);
+```
+
+### 5. 预约表 (reservations)
+```sql
+CREATE TABLE reservations (
+    reservation_id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    book_id INT NOT NULL,
+    reservation_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expiry_date DATETIME NOT NULL,
+    status ENUM('pending', 'fulfilled', 'cancelled', 'expired') NOT NULL DEFAULT 'pending',
+    FOREIGN KEY (user_id) REFERENCES users(user_id),
+    FOREIGN KEY (book_id) REFERENCES books(book_id)
+);
+```
+
+### 6. 罚款记录表 (fines)
+```sql
+CREATE TABLE fines (
+    fine_id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    record_id INT NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    issue_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    paid_date DATETIME,
+    reason ENUM('overdue', 'damage', 'lost') NOT NULL,
+    description TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(user_id),
+    FOREIGN KEY (record_id) REFERENCES borrow_records(record_id)
+);
+```
+
+### 7. 系统日志表 (system_logs)
+```sql
+CREATE TABLE system_logs (
+    log_id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT,
+    action_type VARCHAR(50) NOT NULL,
+    action_description TEXT,
+    ip_address VARCHAR(50),
+    action_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+```
+
+## 索引设计
+```sql
+-- 用户表索引
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_user_type ON users(user_type);
+
+-- 图书表索引
+CREATE INDEX idx_books_title ON books(title);
+CREATE INDEX idx_books_author ON books(author);
+CREATE INDEX idx_books_isbn ON books(isbn);
+CREATE INDEX idx_books_category ON books(category_id);
+
+-- 借阅记录索引
+CREATE INDEX idx_borrow_records_user ON borrow_records(user_id);
+CREATE INDEX idx_borrow_records_book ON borrow_records(book_id);
+CREATE INDEX idx_borrow_records_status ON borrow_records(status);
+CREATE INDEX idx_borrow_records_due_date ON borrow_records(due_date);
+
+-- 预约表索引
+CREATE INDEX idx_reservations_user ON reservations(user_id);
+CREATE INDEX idx_reservations_book ON reservations(book_id);
+CREATE INDEX idx_reservations_status ON reservations(status);
+```
+
+## 数据库关系图
+1. 用户(users)与借阅记录(borrow_records)是一对多关系
+2. 图书(books)与借阅记录(borrow_records)是一对多关系
+3. 图书分类(categories)与图书(books)是一对多关系
+4. 用户(users)与预约(reservations)是一对多关系
+5. 图书(books)与预约(reservations)是一对多关系
+6. 借阅记录(borrow_records)与罚款(fines)是一对多关系
+
+此数据库设计支持图书管理系统的基本功能，包括用户管理、图书管理、借阅管理、预约管理和罚款管理等功能。
