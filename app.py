@@ -1,7 +1,7 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, send_file
 import requests
 import json
-from config import DEEPSEEK_API_KEY
+from config import DEEPSEEK_API_KEY, TEST_MODE
 from flask_sqlalchemy import SQLAlchemy
 from module import db, User
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -13,6 +13,10 @@ app.config.from_pyfile('config.py')
 db.init_app(app)
 
 def call_deepseek_api(prompt):
+    if TEST_MODE:
+        return f"[测试模式] 您的请求是：{prompt}\n返回伪造内容用于前端调试。"
+    
+    print("正在调用 DeepSeek API...")
     url = "https://api.deepseek.com/v1/chat/completions"
     headers = {
         "Content-Type": "application/json",
@@ -26,9 +30,15 @@ def call_deepseek_api(prompt):
         ]
     }
 
-    response = requests.post(url, headers=headers, data=json.dumps(data))
-    result = response.json()
-    return result['choices'][0]['message']['content']
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+        result = response.json()
+        print("DeepSeek 返回成功")
+        return result['choices'][0]['message']['content']
+    except Exception as e:
+        print("DeepSeek 调用失败:", e)
+        return "生成失败，请稍后再试。"
 
 
 @app.route('/')
@@ -44,11 +54,20 @@ def generate():
     prompt_map = {
         "architecture": f"请为{system_type}生成系统架构设计。",
         "database": f"请为{system_type}生成数据库设计，包括表结构。",
-        "code": f"请为{system_type}生成主要模块的核心代码。",
+        "code": f"请为{system_type}生成系统代码，使用python编写，后端与mysql连接，页面使用tkinter库制作，mysql连接信息为mysql+pymysql://root:280204353jyc@localhost/software?charset=utf8mb4，请按照:"\
+                    "## 1. 模块名称（py文件名称.py）" \
+                    "```python" \
+                    "此文件代码内容" \
+                    "```" \
+                    "的格式输出,注意格式内使用的括号是（）",
         "test": f"请为{system_type}生成测试用例。",
     }
 
-    prompt = prompt_map.get(content_type, "请生成相关内容")
+    #测试用
+    # prompt = prompt_map.get(content_type, "请生成相关内容,只需要输出前100个字符" )
+    # result = call_deepseek_api(prompt)
+
+    prompt = prompt_map.get(content_type, "请生成相关内容，尽量精简，输出字符不要超过大模型的单次最大输出字符数，以便部署")
     result = call_deepseek_api(prompt)
 
     return result
@@ -59,6 +78,7 @@ def export():
     export_content = request.form['export_content']
     filename = request.form.get('filename', 'exported.txt')
 
+    os.makedirs('./exports', exist_ok=True)  # 确保目录存在
     path = f"./exports/{filename}"
     with open(path, 'w', encoding='utf-8') as f:
         f.write(export_content)
@@ -66,10 +86,12 @@ def export():
     return send_file(path, as_attachment=True)
 
 
+
 # 初始化数据库（首次运行）
 #with app.app_context():
-#    if not os.path.exists('users.db'):
-#        db.create_all()
+    if not os.path.exists('users.db'):
+        db.create_all()
+
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
